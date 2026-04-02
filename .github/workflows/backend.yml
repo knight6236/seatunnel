@@ -238,11 +238,10 @@ jobs:
       needs.changes.outputs.engine-e2e == 'true' ||
       needs.changes.outputs.ut-modules != '' ||
       needs.changes.outputs.it-modules != ''
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         java: [ '8', '11' ]
-        os: [ 'ubuntu-latest', 'windows-latest' ]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -251,14 +250,17 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Build and install all modules (skip tests)
+      - name: Build and install all modules
         run: |
-          ./mvnw -B -T 2C clean install -DskipTests -D"license.skipAddThirdParty"=true -D"skip.ui"=true -Pci
-      - name: Save Maven local repository
+          ./mvnw -B -T 2C clean install \
+            -DskipTests \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true -Pci
+      - name: Cache seatunnel artifacts
         uses: actions/cache/save@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-${{ matrix.os }}-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
 
   dependency-license:
     if: needs.changes.outputs.api == 'true' || needs.changes.outputs.engine == 'true'
@@ -273,11 +275,11 @@ jobs:
         with:
           java-version: '8'
           distribution: 'temurin'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java8-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java8-${{ github.run_id }}
       - name: Check Dependencies Licenses
         run: tools/dependencies/checkLicense.sh
 
@@ -330,14 +332,18 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-${{ matrix.os }}-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: Run all modules unit test
         run: |
-          ./mvnw -B -T 2C verify -DskipUT=false -DskipIT=true -D"license.skipAddThirdParty"=true -D"skip.ui"=true --no-snapshot-updates
+          ./mvnw -B -T 2C verify \
+            -DskipUT=false -DskipIT=true \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
+            --no-snapshot-updates
         env:
           MAVEN_OPTS: -Xmx4096m
 
@@ -359,11 +365,11 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: free disk space
         run: tools/github/free_disk_space.sh
       - name: Run updated modules IT partition ${{ matrix.partition }}
@@ -371,8 +377,10 @@ jobs:
           sub_modules=`python tools/update_modules_check/update_modules_check.py sub_update_it_module ${{needs.changes.outputs.it-modules}} 8 ${{ matrix.partition }}`
           if [ ! -z "$sub_modules" ]; then
             echo "Running: $sub_modules"
-            ./mvnw -T 2C -B verify -DskipUT=true -DskipIT=false \
-              -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+            ./mvnw -T 1 -B verify \
+              -DskipUT=true -DskipIT=false \
+              -D"license.skipAddThirdParty"=true \
+              -D"skip.ui"=true \
               --no-snapshot-updates \
               -pl "$sub_modules" -am -Pci
           else
@@ -397,16 +405,17 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: free disk space
         run: tools/github/free_disk_space.sh
       - name: Run seatunnel zeta integration test
         run: |
-          ./mvnw -T 2C -B verify -DskipUT=true -DskipIT=false \
+          ./mvnw -T 1 -B verify \
+            -DskipUT=true -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             --no-snapshot-updates \
             -pl :connector-seatunnel-e2e-base,:connector-console-seatunnel-e2e \
@@ -434,15 +443,17 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: Run seatunnel zeta on k8s test
         run: |
-          ./mvnw -T 2C -B verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -T 1 -B verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl :seatunnel-engine-k8s-e2e -am -Pci
         env:
@@ -467,17 +478,19 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: free disk space
         run: tools/github/free_disk_space.sh
       - name: Run transform-v2 IT partition ${{ matrix.partition }}
         run: |
-          ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -B -T 1 verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl :seatunnel-transforms-v2-e2e-part-${{ matrix.partition }} \
             -am -Pci
@@ -502,11 +515,11 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: free disk space
         run: tools/github/free_disk_space.sh
       - name: Run connector-v2 IT partition ${{ matrix.partition }}
@@ -514,8 +527,10 @@ jobs:
           ./mvnw help:evaluate -Dexpression=project.modules -q -DforceStdout -pl :seatunnel-connector-v2-e2e >> /tmp/sub_module.txt
           sub_modules=`python tools/update_modules_check/update_modules_check.py sub /tmp/sub_module.txt`
           run_it_modules=`python tools/update_modules_check/update_modules_check.py sub_it_module "$sub_modules" 7 ${{ matrix.partition }}`
-          ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -B -T 1 verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl $run_it_modules -am -Pci
         env:
@@ -539,17 +554,19 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: free disk space
         run: tools/github/free_disk_space.sh
       - name: Run jdbc connectors IT partition ${{ matrix.partition }}
         run: |
-          ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -B -T 1 verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl :connector-jdbc-e2e-part-${{ matrix.partition }} \
             -am -Pci
@@ -572,17 +589,19 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: free disk space
         run: tools/github/free_disk_space.sh
       - name: Run jdbc connectors IT (sink ddl)
         run: |
-          ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -B -T 1 verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl :connector-jdbc-e2e-ddl -am -Pci
         env:
@@ -604,15 +623,17 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: Run kudu connector IT
         run: |
-          ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -B -T 1 verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl :connector-kudu-e2e -am -Pci
         env:
@@ -634,15 +655,17 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: Run amazonsqs connector IT
         run: |
-          ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -B -T 1 verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl :connector-amazonsqs-e2e -am -Pci
         env:
@@ -664,17 +687,19 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: free disk space
         run: tools/github/free_disk_space.sh
       - name: Run kafka connector IT
         run: |
-          ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -B -T 1 verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl :connector-kafka-e2e -am -Pci
         env:
@@ -696,15 +721,17 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: Run rocketmq connector IT
         run: |
-          ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -B -T 1 verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl :connector-rocketmq-e2e -am -Pci
         env:
@@ -726,15 +753,17 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: Run doris connector IT
         run: |
-          ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -B -T 1 verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl :connector-doris-e2e -am -Pci
         env:
@@ -756,15 +785,17 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: Run paimon connector IT
         run: |
-          ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -B -T 1 verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl :connector-paimon-e2e -am -Pci
         env:
@@ -786,11 +817,11 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: free disk space
         run: tools/github/free_disk_space.sh
       - name: Run oracle cdc connector IT
@@ -800,8 +831,10 @@ jobs:
           max_attempts: 3
           retry_on: error
           command: |
-            ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-              -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+            ./mvnw -B -T 1 verify \
+              -DskipUT=true -DskipIT=false \
+              -D"license.skipAddThirdParty"=true \
+              -D"skip.ui"=true \
               --no-snapshot-updates \
               -pl :connector-cdc-oracle-e2e -am -Pci
 
@@ -821,15 +854,17 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: Run file local connector IT
         run: |
-          ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -B -T 1 verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl :connector-file-local-e2e -am -Pci
         env:
@@ -851,15 +886,17 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: Run file sftp connector IT
         run: |
-          ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -B -T 1 verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl :connector-file-sftp-e2e -am -Pci
         env:
@@ -881,17 +918,19 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: free disk space
         run: tools/github/free_disk_space.sh
       - name: Run redis connector IT
         run: |
-          ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -B -T 1 verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl :connector-redis-e2e -am -Pci
         env:
@@ -913,17 +952,19 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore Maven local repository
+      - name: Restore seatunnel artifacts
         uses: actions/cache/restore@v4
         with:
-          path: ~/.m2/repository
-          key: m2-repo-ubuntu-latest-java${{ matrix.java }}-${{ github.run_id }}
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-java${{ matrix.java }}-${{ github.run_id }}
       - name: free disk space
         run: tools/github/free_disk_space.sh
       - name: Run sensorsdata connector IT
         run: |
-          ./mvnw -B -T 2C verify -DskipUT=true -DskipIT=false \
-            -D"license.skipAddThirdParty"=true -D"skip.ui"=true \
+          ./mvnw -B -T 1 verify \
+            -DskipUT=true -DskipIT=false \
+            -D"license.skipAddThirdParty"=true \
+            -D"skip.ui"=true \
             --no-snapshot-updates \
             -pl :connector-sensorsdata-e2e -am -Pci
         env:
