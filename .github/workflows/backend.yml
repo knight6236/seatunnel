@@ -29,9 +29,6 @@ concurrency:
   group: backend-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-env:
-  TEST_IN_PR: ${{ inputs.TEST_IN_PR }}
-
 jobs:
   license-header:
     name: License header
@@ -55,7 +52,11 @@ jobs:
       - name: Check code style
         run: ./mvnw --batch-mode --quiet --no-snapshot-updates clean spotless:check
       - name: Check code specification
-        run: ./mvnw -B -T 2C clean test -D"license.skipAddThirdParty"=true -pl seatunnel-ci-tools -am --no-snapshot-updates
+        run: |
+          ./mvnw -B -T 2C clean test \
+            -D"license.skipAddThirdParty"=true \
+            -pl seatunnel-ci-tools -am \
+            --no-snapshot-updates
         env:
           MAVEN_OPTS: -Xmx512m
       - name: Check for .class files in git
@@ -74,6 +75,7 @@ jobs:
     name: Check Helm Chart Syntax
     needs: [ license-header, code-style ]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Setup Helm
@@ -81,157 +83,216 @@ jobs:
       - name: Lint Chart
         run: helm lint deploy/kubernetes/seatunnel
 
-  sanity-check:
-    name: Sanity check results
-    needs: [ license-header, code-style ]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Check results
-        run: |
-          [[ ${{ needs.license-header.result }} == 'success' ]] || exit 1;
-          [[ ${{ needs.code-style.result }} == 'success' ]] || exit 1;
-
   changes:
+    name: Detect changed modules
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
-      api: ${{ steps.filter.outputs.api }}
-      engine: ${{ steps.filter.outputs.engine }}
+      api:        ${{ steps.filter.outputs.api }}
+      engine:     ${{ steps.filter.outputs.engine }}
       engine-e2e: ${{ steps.filter.outputs.engine-e2e }}
-      docs: ${{ steps.filter.outputs.docs }}
+      docs:       ${{ steps.filter.outputs.docs }}
       ut-modules: ${{ steps.ut-modules.outputs.modules }}
       it-modules: ${{ steps.it-modules.outputs.modules }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: '2000'
-      - name: checkout apache seatunnel dev branch
+          fetch-depth: 2000
+      - name: Initialize git remote and detect current branch
         id: git_init
         run: |
           /usr/bin/git remote add apache https://github.com/apache/seatunnel
-          /usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=2000 apache +refs/heads/dev*:refs/remotes/apache/dev* +refs/tags/dev*:refs/tags/dev*
+          /usr/bin/git -c protocol.version=2 fetch \
+            --no-tags --prune --no-recurse-submodules --depth=2000 apache \
+            +refs/heads/dev*:refs/remotes/apache/dev* \
+            +refs/tags/dev*:refs/tags/dev*
           /usr/bin/git checkout apache/dev
           /usr/bin/git checkout '${{ github.ref }}'
           echo "branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" >> $GITHUB_OUTPUT
       - uses: actions/setup-python@v4
         with:
-          python-version: '3.11.0'
+          python-version: '3.11'
       - uses: actions/setup-java@v3
         with:
           java-version: '8'
           distribution: 'temurin'
           cache: 'maven'
-      - name: Check for file changes by python
+      - name: Detect file changes
         id: filter
         run: |
+          pip install --quiet GitPython
           current_branch='${{ steps.git_init.outputs.branch }}'
-          pip install GitPython
           workspace="${GITHUB_WORKSPACE}"
           repository_owner="${GITHUB_REPOSITORY_OWNER}"
-          cv2_files=`python tools/update_modules_check/check_file_updates.py ua $workspace apache/dev origin/$current_branch "seatunnel-connectors-v2/**"`
-          echo "cv2=${cv2_files%%$'\n'*}" >> $GITHUB_OUTPUT
-          echo "cv2_files=${cv2_files#*$'\n'}" >> $GITHUB_OUTPUT
-
-          cv2_e2e_files=`python tools/update_modules_check/check_file_updates.py ua $workspace apache/dev origin/$current_branch "seatunnel-e2e/seatunnel-connector-v2-e2e/**"`
-          echo "cv2-e2e=${cv2_e2e_files%%$'\n'*}" >> $GITHUB_OUTPUT
-          echo "cv2-e2e_files=${cv2_e2e_files#*$'\n'}" >> $GITHUB_OUTPUT
-
-          engine_files=`python tools/update_modules_check/check_file_updates.py ua $workspace apache/dev origin/$current_branch "seatunnel-engine/**"`
-          echo "engine=${engine_files%%$'\n'*}" >> $GITHUB_OUTPUT
-          echo "engine_files=${engine_files#*$'\n'}" >> $GITHUB_OUTPUT
-
-          deleted_poms_files=`python tools/update_modules_check/check_file_updates.py d $workspace apache/dev origin/$current_branch "**/pom.xml"`
-          echo "deleted-poms=${deleted_poms_files%%$'\n'*}" >> $GITHUB_OUTPUT
-          echo "deleted-poms_files=${deleted_poms_files#*$'\n'}" >> $GITHUB_OUTPUT
-
-          doc_files=`python tools/update_modules_check/check_file_updates.py ua $workspace apache/dev origin/$current_branch "docs/**"`
-          echo "docs=${doc_files%%$'\n'*}" >> $GITHUB_OUTPUT
-          echo "docs_files=${doc_files#*$'\n'}" >> $GITHUB_OUTPUT
-
-          engine_e2e_files=`python tools/update_modules_check/check_file_updates.py ua $workspace apache/dev origin/$current_branch "seatunnel-e2e/seatunnel-engine-e2e/**"`
-          echo "engine-e2e=${engine_e2e_files%%$'\n'*}" >> $GITHUB_OUTPUT
-          echo "engine-e2e_files=${engine_e2e_files#*$'\n'}" >> $GITHUB_OUTPUT
-
-          api_files=`python tools/update_modules_check/check_file_updates.py ua $workspace apache/dev origin/$current_branch "seatunnel-api/" "seatunnel-common/" "seatunnel-config/" "seatunnel-core/" "seatunnel-e2e/seatunnel-e2e-common/" "seatunnel-formats/" "seatunnel-plugin-discovery/" "seatunnel-transforms-v2/" "seatunnel-translation/" "seatunnel-e2e/seatunnel-transforms-v2-e2e/" "pom.xml" "/workflows/" "tools/" "seatunnel-dist/"`
-          true_or_false=${api_files%%$'\n'*}
-          file_list=${api_files#*$'\n'}
-
-          if [[ $repository_owner == 'apache' && "$GITHUB_EVENT_NAME" != "pull_request" ]];then
-            true_or_false='true'
+          run_check() {
+            local output_prefix="$1"
+            shift
+            python tools/update_modules_check/check_file_updates.py \
+              ua "$workspace" apache/dev "origin/$current_branch" "$@" \
+              > /tmp/check_output.txt 2>/dev/null || true
+            local changed
+            changed=$(head -1 /tmp/check_output.txt)
+            tail -n +2 /tmp/check_output.txt > "/tmp/files_${output_prefix}.txt"
+            echo "${output_prefix}=${changed}" >> $GITHUB_OUTPUT
+          }
+          run_check "cv2"         "seatunnel-connectors-v2/**"
+          run_check "cv2_e2e"     "seatunnel-e2e/seatunnel-connector-v2-e2e/**"
+          run_check "engine"      "seatunnel-engine/**"
+          run_check "engine_e2e"  "seatunnel-e2e/seatunnel-engine-e2e/**"
+          run_check "docs"        "docs/**"
+          python tools/update_modules_check/check_file_updates.py \
+            d "$workspace" apache/dev "origin/$current_branch" "**/pom.xml" \
+            > /tmp/check_output.txt 2>/dev/null || true
+          echo "deleted_poms=$(head -1 /tmp/check_output.txt)" >> $GITHUB_OUTPUT
+          tail -n +2 /tmp/check_output.txt > /tmp/files_deleted_poms.txt
+          python tools/update_modules_check/check_file_updates.py \
+            ua "$workspace" apache/dev "origin/$current_branch" \
+            "seatunnel-api/" \
+            "seatunnel-common/" \
+            "seatunnel-config/" \
+            "seatunnel-core/" \
+            "seatunnel-e2e/seatunnel-e2e-common/" \
+            "seatunnel-formats/" \
+            "seatunnel-plugin-discovery/" \
+            "seatunnel-transforms-v2/" \
+            "seatunnel-translation/" \
+            "seatunnel-e2e/seatunnel-transforms-v2-e2e/" \
+            "pom.xml" \
+            "/workflows/" \
+            "tools/" \
+            "seatunnel-dist/" \
+            > /tmp/check_output.txt 2>/dev/null || true
+          api_changed=$(head -1 /tmp/check_output.txt)
+          if [[ "$repository_owner" == "apache" && "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
+            api_changed='true'
           fi
-          echo "api=$true_or_false" >> $GITHUB_OUTPUT
-          echo "api_files=$file_list" >> $GITHUB_OUTPUT
+          echo "api=${api_changed}" >> $GITHUB_OUTPUT
 
-      - name: Check Connector V2 Update
+      - name: Compute changed connector-v2 modules
         id: cv2-modules
-        if: ${{ steps.filter.outputs.cv2 == 'true' }}
-        run: echo "modules=`python tools/update_modules_check/update_modules_check.py cv2 "${{ steps.filter.outputs.cv2_files }}"`" >> $GITHUB_OUTPUT
+        if: steps.filter.outputs.cv2 == 'true'
+        run: |
+          files=$(cat /tmp/files_cv2.txt)
+          if [ -n "$files" ]; then
+            result=$(python tools/update_modules_check/update_modules_check.py cv2 "$files")
+            echo "modules=$result" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Check Connector V2 E2E Update
+      - name: Compute changed connector-v2-e2e modules
         id: cv2-e2e-modules
-        if: ${{ steps.filter.outputs.cv2-e2e == 'true' }}
-        run: echo "modules=`python tools/update_modules_check/update_modules_check.py cv2-e2e "${{ steps.filter.outputs.cv2-e2e_files }}"`" >> $GITHUB_OUTPUT
+        if: steps.filter.outputs.cv2_e2e == 'true'
+        run: |
+          files=$(cat /tmp/files_cv2_e2e.txt)
+          if [ -n "$files" ]; then
+            result=$(python tools/update_modules_check/update_modules_check.py cv2-e2e "$files")
+            echo "modules=$result" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Check Engine Update
+      - name: Compute changed engine modules
         id: engine-modules
-        if: ${{ steps.filter.outputs.engine == 'true' }}
-        run: echo "modules=`python tools/update_modules_check/update_modules_check.py engine "${{ steps.filter.outputs.engine_files }}"`" >> $GITHUB_OUTPUT
+        if: steps.filter.outputs.engine == 'true'
+        run: |
+          files=$(cat /tmp/files_engine.txt)
+          if [ -n "$files" ]; then
+            result=$(python tools/update_modules_check/update_modules_check.py engine "$files")
+            echo "modules=$result" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Check Engine E2E Update
+      - name: Compute changed engine-e2e modules
         id: engine-e2e-modules
-        if: ${{ steps.filter.outputs.engine-e2e == 'true' }}
-        run: echo "modules=`python tools/update_modules_check/update_modules_check.py engine-e2e "${{ steps.filter.outputs.engine-e2e_files }}"`" >> $GITHUB_OUTPUT
+        if: steps.filter.outputs.engine_e2e == 'true'
+        run: |
+          files=$(cat /tmp/files_engine_e2e.txt)
+          if [ -n "$files" ]; then
+            result=$(python tools/update_modules_check/update_modules_check.py engine-e2e "$files")
+            echo "modules=$result" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Check Deleted Modules
+      - name: Compute deleted modules
         id: deleted-modules
-        if: ${{ steps.filter.outputs.deleted-poms == 'true' }}
-        run: echo "modules=`python tools/update_modules_check/update_modules_check.py delete "${{ steps.filter.outputs.deleted-poms_files }}"`" >> $GITHUB_OUTPUT
+        if: steps.filter.outputs.deleted_poms == 'true'
+        run: |
+          files=$(cat /tmp/files_deleted_poms.txt)
+          if [ -n "$files" ]; then
+            result=$(python tools/update_modules_check/update_modules_check.py delete "$files")
+            echo "modules=$result" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Make unit test modules
+      - name: Compute unit test target modules
         id: ut-modules
         timeout-minutes: 60
-        if: ${{ steps.filter.outputs.api == 'false' && (steps.engine-modules.outputs.modules != '' || steps.cv2-modules.outputs.modules != '') }}
+        if: >-
+          steps.filter.outputs.api == 'false' &&
+          (steps.engine-modules.outputs.modules != '' ||
+           steps.cv2-modules.outputs.modules != '')
         run: |
           modules='${{ steps.engine-modules.outputs.modules }}${{ steps.cv2-modules.outputs.modules }}'
-          modules=${modules: 1}
-          pl_modules=`python tools/update_modules_check/update_modules_check.py replace "$modules"`
+          modules=${modules:1}
+          pl_modules=$(python tools/update_modules_check/update_modules_check.py replace "$modules")
           delete_modules='${{ steps.deleted-modules.outputs.modules }}'
-          if [[ "zz"$delete_modules != "zz" ]];then
-            pl_modules=`python tools/update_modules_check/update_modules_check.py rm "$pl_modules" "$delete_modules"`
+          if [ -n "$delete_modules" ]; then
+            pl_modules=$(python tools/update_modules_check/update_modules_check.py rm \
+              "$pl_modules" "$delete_modules")
           fi
-          if [[ "zz"$pl_modules == "zz" ]];then exit 0; fi
-          ./mvnw help:evaluate -Dexpression=project.modules -q -DforceStdout -pl $pl_modules > /tmp/sub_module.txt
-          sub_modules=`python tools/update_modules_check/update_modules_check.py sub /tmp/sub_module.txt`
-          includes=`python tools/update_modules_check/update_modules_check.py tree "$modules$sub_modules"`
-          ./mvnw -Pci -D"e2e.dependency.skip"=false dependency:tree $includes -DoutputType=text -DoutputFile=/tmp/tree_out.txt
-          build_modules=`python tools/update_modules_check/update_modules_check.py final_ut /tmp/tree_out.txt`
-          if [[ "zz"$build_modules == "zz" ]];then build_modules=$pl_modules; fi
+          if [ -z "$pl_modules" ]; then
+            echo "No unit test modules to run."
+            exit 0
+          fi
+          ./mvnw help:evaluate \
+            -Dexpression=project.modules -q -DforceStdout \
+            -pl "$pl_modules" > /tmp/sub_module.txt
+          sub_modules=$(python tools/update_modules_check/update_modules_check.py \
+            sub /tmp/sub_module.txt)
+          includes=$(python tools/update_modules_check/update_modules_check.py \
+            tree "${modules}${sub_modules}")
+          ./mvnw -Pci -D"e2e.dependency.skip"=false \
+            dependency:tree $includes \
+            -DoutputType=text -DoutputFile=/tmp/tree_out.txt
+          build_modules=$(python tools/update_modules_check/update_modules_check.py \
+            final_ut /tmp/tree_out.txt)
+          if [ -z "$build_modules" ]; then
+            build_modules="$pl_modules"
+          fi
           echo "modules=$build_modules" >> $GITHUB_OUTPUT
 
-      - name: Make integration test modules
+      - name: Compute integration test target modules
         id: it-modules
         timeout-minutes: 60
-        if: ${{ steps.filter.outputs.api == 'false' && (steps.engine-modules.outputs.modules != '' || steps.cv2-modules.outputs.modules != '' || steps.cv2-e2e-modules.outputs.modules != '') }}
+        if: >-
+          steps.filter.outputs.api == 'false' &&
+          (steps.engine-modules.outputs.modules != '' ||
+           steps.cv2-modules.outputs.modules != '' ||
+           steps.cv2-e2e-modules.outputs.modules != '')
         run: |
           modules='${{ steps.cv2-e2e-modules.outputs.modules }}${{ steps.engine-e2e-modules.outputs.modules }}${{ steps.engine-modules.outputs.modules }}${{ steps.cv2-modules.outputs.modules }}'
-          modules=${modules: 1}
-          pl_modules=`python tools/update_modules_check/update_modules_check.py replace "$modules"`
+          modules=${modules:1}
+          pl_modules=$(python tools/update_modules_check/update_modules_check.py replace "$modules")
           delete_modules='${{ steps.deleted-modules.outputs.modules }}'
-          if [[ "zz"$delete_modules != "zz" ]];then
-            pl_modules=`python tools/update_modules_check/update_modules_check.py rm "$pl_modules" "$delete_modules"`
+          if [ -n "$delete_modules" ]; then
+            pl_modules=$(python tools/update_modules_check/update_modules_check.py rm \
+              "$pl_modules" "$delete_modules")
           fi
-          if [[ "zz"$pl_modules == "zz" ]];then exit 0; fi
-          ./mvnw help:evaluate -Dexpression=project.modules -q -DforceStdout -pl $pl_modules > /tmp/sub_module.txt
-          sub_modules=`python tools/update_modules_check/update_modules_check.py sub /tmp/sub_module.txt`
-          includes=`python tools/update_modules_check/update_modules_check.py tree "$modules$sub_modules"`
-          ./mvnw -Pci -D"e2e.dependency.skip"=false dependency:tree $includes -DoutputType=text -DoutputFile=/tmp/tree_out.txt
-          build_modules=`python tools/update_modules_check/update_modules_check.py final_it /tmp/tree_out.txt`
+          if [ -z "$pl_modules" ]; then
+            echo "No integration test modules to run."
+            exit 0
+          fi
+          ./mvnw help:evaluate \
+            -Dexpression=project.modules -q -DforceStdout \
+            -pl "$pl_modules" > /tmp/sub_module.txt
+          sub_modules=$(python tools/update_modules_check/update_modules_check.py \
+            sub /tmp/sub_module.txt)
+          includes=$(python tools/update_modules_check/update_modules_check.py \
+            tree "${modules}${sub_modules}")
+          ./mvnw -Pci -D"e2e.dependency.skip"=false \
+            dependency:tree $includes \
+            -DoutputType=text -DoutputFile=/tmp/tree_out.txt
+          build_modules=$(python tools/update_modules_check/update_modules_check.py \
+            final_it /tmp/tree_out.txt)
           echo "modules=$build_modules" >> $GITHUB_OUTPUT
 
   build:
     name: Compile and Install
-    needs: [ changes, sanity-check ]
+    needs: [ license-header, code-style, changes ]
     if: >-
       needs.changes.outputs.api == 'true' ||
       needs.changes.outputs.engine == 'true' ||
@@ -252,26 +313,28 @@ jobs:
           ./mvnw -B -T 2C clean install \
             -DskipTests \
             -D"license.skipAddThirdParty"=true \
-            -D"skip.ui"=true -Pci
+            -D"skip.ui"=true \
+            -Pci
       - name: Clean unnecessary artifacts before caching
         run: |
           cd ~/.m2/repository/org/apache/seatunnel
-          find . -name "*-sources.jar" -delete
-          find . -name "*-javadoc.jar" -delete
-          find . -name "*-tests.jar" -delete
+          find . -name "*-sources.jar"        -delete
+          find . -name "*-javadoc.jar"        -delete
+          find . -name "*-tests.jar"          -delete
           find . -name "_remote.repositories" -delete
-          find . -name "*.lastUpdated" -delete
+          find . -name "*.lastUpdated"        -delete
           echo "Cached artifact size:"
           du -sh .
-      - name: Cache seatunnel artifacts
+      - name: Save seatunnel build artifacts to cache
         uses: actions/cache/save@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
 
   dependency-license:
-    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.engine == 'true'
+    name: Check dependency licenses
     needs: [ build, changes ]
+    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -283,17 +346,24 @@ jobs:
           java-version: '8'
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: Check Dependencies Licenses
-        run: tools/dependencies/checkLicense.sh
+          restore-keys: |
+            seatunnel-m2-
+      - name: Check dependency licenses
+        run: |
+          set -e
+          echo "Starting license check..."
+          tools/dependencies/checkLicense.sh
+          echo "License check passed."
 
   document:
+    name: Build documentation
+    needs: [ changes ]
     if: needs.changes.outputs.api == 'true' || needs.changes.outputs.docs == 'true'
-    needs: [ changes, sanity-check ]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -304,16 +374,22 @@ jobs:
         with:
           repository: apache/seatunnel-website
           path: seatunnel-website
-      - run: bash seatunnel-pr/tools/documents/sync.sh seatunnel-pr seatunnel-website
+      - name: Sync documents
+        run: bash seatunnel-pr/tools/documents/sync.sh seatunnel-pr seatunnel-website
       - uses: actions/setup-node@v4
         with:
           node-version: 18.20.7
-      - run: |
-          cd seatunnel-website && npm set strict-ssl false && npm install && npm run build
+      - name: Build website
+        run: |
+          cd seatunnel-website
+          npm set strict-ssl false
+          npm install
+          npm run build
 
   seatunnel-ui:
+    name: Build SeaTunnel UI
+    needs: [ changes ]
     if: needs.changes.outputs.api == 'true'
-    needs: [ changes, sanity-check ]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -321,13 +397,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20.x
-      - run: cd seatunnel-engine/seatunnel-engine-ui/ && npm install && npm run lint && npm run test:unit && npm run build
+      - name: Lint, test and build UI
+        run: |
+          cd seatunnel-engine/seatunnel-engine-ui/
+          npm install
+          npm run lint
+          npm run test:unit
+          npm run build
 
   unit-test:
+    name: Unit test (Java ${{ matrix.java }}, ${{ matrix.os }})
     needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'true' || (needs.changes.outputs.api == 'false' && needs.changes.outputs.ut-modules != '')
+    if: >-
+      needs.changes.outputs.api == 'true' ||
+      (needs.changes.outputs.api == 'false' &&
+       needs.changes.outputs.ut-modules != '')
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         java: [ '8', '11' ]
         os: [ 'ubuntu-latest', 'windows-latest' ]
@@ -340,19 +427,25 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: Run all modules unit test
+          restore-keys: |
+            seatunnel-m2-
+      - name: Run unit tests
         run: ./mvnw -B -T 2C verify -DskipUT=false -DskipIT=true -D"license.skipAddThirdParty"=true -D"skip.ui"=true --no-snapshot-updates
         env:
           MAVEN_OPTS: -Xmx4096m
 
   updated-modules-integration-test:
+    name: Integration test - updated modules (Java ${{ matrix.java }}, partition ${{ matrix.partition }})
     needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'false' && needs.changes.outputs.engine == 'false' && needs.changes.outputs.it-modules != ''
+    if: >-
+      needs.changes.outputs.api == 'false' &&
+      needs.changes.outputs.engine == 'false' &&
+      needs.changes.outputs.it-modules != ''
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -368,35 +461,46 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: free disk space
+          restore-keys: |
+            seatunnel-m2-
+      - name: Free disk space
         run: tools/github/free_disk_space.sh
-      - name: Run updated modules IT partition ${{ matrix.partition }}
+      - name: Run integration tests (partition ${{ matrix.partition }})
         run: |
-          sub_modules=`python tools/update_modules_check/update_modules_check.py sub_update_it_module ${{needs.changes.outputs.it-modules}} 8 ${{ matrix.partition }}`
-          if [ ! -z "$sub_modules" ]; then
-            echo "Running: $sub_modules"
+          sub_modules=$(python tools/update_modules_check/update_modules_check.py \
+            sub_update_it_module \
+            '${{ needs.changes.outputs.it-modules }}' \
+            8 ${{ matrix.partition }})
+          if [ -n "$sub_modules" ]; then
+            echo "Running modules: $sub_modules"
             ./mvnw -T 1 -B verify \
-              -DskipUT=true -DskipIT=false \
+              -DskipUT=true \
+              -DskipIT=false \
               -D"license.skipAddThirdParty"=true \
               -D"skip.ui"=true \
               --no-snapshot-updates \
               -pl "$sub_modules" -am -Pci
           else
-            echo "sub modules is empty, skipping"
+            echo "Partition ${{ matrix.partition }}: no modules assigned, skipping."
           fi
         env:
           MAVEN_OPTS: -Xmx4096m
 
   engine-v2-it:
+    name: Engine v2 integration test (Java ${{ matrix.java }})
     needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.engine-e2e == 'true'
+    if: >-
+      needs.changes.outputs.api == 'true' ||
+      needs.changes.outputs.engine == 'true' ||
+      needs.changes.outputs.engine-e2e == 'true'
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         java: [ '8', '11' ]
     timeout-minutes: 120
@@ -408,17 +512,20 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: free disk space
+          restore-keys: |
+            seatunnel-m2-
+      - name: Free disk space
         run: tools/github/free_disk_space.sh
-      - name: Run seatunnel zeta integration test
+      - name: Run engine integration tests
         run: |
           ./mvnw -T 1 -B verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             --no-snapshot-updates \
             -pl :connector-seatunnel-e2e-base,:connector-console-seatunnel-e2e \
@@ -427,10 +534,14 @@ jobs:
           MAVEN_OPTS: -Xmx4096m
 
   engine-k8s-it:
+    name: Engine k8s integration test (Java ${{ matrix.java }})
     needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'true' || contains(needs.changes.outputs.it-modules, 'seatunnel-engine-k8s-e2e')
+    if: >-
+      needs.changes.outputs.api == 'true' ||
+      contains(needs.changes.outputs.it-modules, 'seatunnel-engine-k8s-e2e')
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         java: [ '8', '11' ]
     timeout-minutes: 45
@@ -438,7 +549,8 @@ jobs:
       - name: Install k3s
         run: |
           curl -sfL https://get.k3s.io | K3S_KUBECONFIG_MODE=777 sh -s - --docker
-          mkdir -p ~/.kube && cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+          mkdir -p ~/.kube
+          cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
       - uses: actions/checkout@v4
       - name: Set up JDK ${{ matrix.java }}
         uses: actions/setup-java@v3
@@ -446,15 +558,18 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: Run seatunnel zeta on k8s test
+          restore-keys: |
+            seatunnel-m2-
+      - name: Run k8s integration tests
         run: |
           ./mvnw -T 1 -B verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
@@ -464,6 +579,7 @@ jobs:
           KUBECONFIG: /etc/rancher/k3s/k3s.yaml
 
   transform-v2-it:
+    name: Transform-v2 integration test (Java ${{ matrix.java }}, partition ${{ matrix.partition }})
     needs: [ build, changes ]
     if: needs.changes.outputs.api == 'true' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
@@ -481,17 +597,20 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: free disk space
+          restore-keys: |
+            seatunnel-m2-
+      - name: Free disk space
         run: tools/github/free_disk_space.sh
-      - name: Run transform-v2 IT partition ${{ matrix.partition }}
+      - name: Run transform-v2 integration tests (partition ${{ matrix.partition }})
         run: |
           ./mvnw -B -T 1 verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
@@ -501,6 +620,7 @@ jobs:
           MAVEN_OPTS: -Xmx4096m
 
   all-connectors-it:
+    name: All connectors integration test (Java ${{ matrix.java }}, partition ${{ matrix.partition }})
     needs: [ build, changes ]
     if: needs.changes.outputs.api == 'true' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
@@ -518,28 +638,37 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: free disk space
+          restore-keys: |
+            seatunnel-m2-
+      - name: Free disk space
         run: tools/github/free_disk_space.sh
-      - name: Run connector-v2 IT partition ${{ matrix.partition }}
+      - name: Run connector integration tests (partition ${{ matrix.partition }})
         run: |
-          ./mvnw help:evaluate -Dexpression=project.modules -q -DforceStdout -pl :seatunnel-connector-v2-e2e >> /tmp/sub_module.txt
-          sub_modules=`python tools/update_modules_check/update_modules_check.py sub /tmp/sub_module.txt`
-          run_it_modules=`python tools/update_modules_check/update_modules_check.py sub_it_module "$sub_modules" 7 ${{ matrix.partition }}`
+          ./mvnw help:evaluate \
+            -Dexpression=project.modules -q -DforceStdout \
+            -pl :seatunnel-connector-v2-e2e \
+            >> /tmp/sub_module.txt
+          sub_modules=$(python tools/update_modules_check/update_modules_check.py \
+            sub /tmp/sub_module.txt)
+          run_it_modules=$(python tools/update_modules_check/update_modules_check.py \
+            sub_it_module "$sub_modules" 7 ${{ matrix.partition }})
           ./mvnw -B -T 1 verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
-            -pl $run_it_modules -am -Pci
+            -pl "$run_it_modules" -am -Pci
         env:
           MAVEN_OPTS: -Xmx4096m
 
   jdbc-connectors-it:
+    name: JDBC connectors integration test (Java ${{ matrix.java }}, partition ${{ matrix.partition }})
     needs: [ build, changes ]
     if: needs.changes.outputs.api == 'true' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
@@ -557,17 +686,20 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: free disk space
+          restore-keys: |
+            seatunnel-m2-
+      - name: Free disk space
         run: tools/github/free_disk_space.sh
-      - name: Run jdbc connectors IT partition ${{ matrix.partition }}
+      - name: Run JDBC integration tests (partition ${{ matrix.partition }})
         run: |
           ./mvnw -B -T 1 verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
@@ -577,10 +709,12 @@ jobs:
           MAVEN_OPTS: -Xmx4096m
 
   jdbc-connectors-it-ddl:
+    name: JDBC connectors DDL integration test (Java ${{ matrix.java }})
     needs: [ build, changes ]
     if: needs.changes.outputs.api == 'true' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         java: [ '8', '11' ]
     timeout-minutes: 180
@@ -592,17 +726,20 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: free disk space
+          restore-keys: |
+            seatunnel-m2-
+      - name: Free disk space
         run: tools/github/free_disk_space.sh
-      - name: Run jdbc connectors IT (sink ddl)
+      - name: Run JDBC DDL integration tests
         run: |
           ./mvnw -B -T 1 verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
@@ -611,10 +748,15 @@ jobs:
           MAVEN_OPTS: -Xmx4096m
 
   kudu-connector-it:
+    name: Kudu connector integration test (Java ${{ matrix.java }})
     needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'false' && needs.changes.outputs.engine == 'false' && contains(needs.changes.outputs.it-modules, 'connector-kudu-e2e')
+    if: >-
+      needs.changes.outputs.api == 'false' &&
+      needs.changes.outputs.engine == 'false' &&
+      contains(needs.changes.outputs.it-modules, 'connector-kudu-e2e')
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         java: [ '8', '11' ]
     timeout-minutes: 60
@@ -626,15 +768,18 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: Run kudu connector IT
+          restore-keys: |
+            seatunnel-m2-
+      - name: Run Kudu integration tests
         run: |
           ./mvnw -B -T 1 verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
@@ -642,11 +787,16 @@ jobs:
         env:
           MAVEN_OPTS: -Xmx4096m
 
-  amazonSqs-connector-it:
+  amazonsqs-connector-it:
+    name: AmazonSQS connector integration test (Java ${{ matrix.java }})
     needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'false' && needs.changes.outputs.engine == 'false' && contains(needs.changes.outputs.it-modules, 'connector-amazonsqs-e2e')
+    if: >-
+      needs.changes.outputs.api == 'false' &&
+      needs.changes.outputs.engine == 'false' &&
+      contains(needs.changes.outputs.it-modules, 'connector-amazonsqs-e2e')
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         java: [ '8', '11' ]
     timeout-minutes: 120
@@ -658,15 +808,18 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: Run amazonsqs connector IT
+          restore-keys: |
+            seatunnel-m2-
+      - name: Run AmazonSQS integration tests
         run: |
           ./mvnw -B -T 1 verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
@@ -675,10 +828,15 @@ jobs:
           MAVEN_OPTS: -Xmx4096m
 
   kafka-connector-it:
+    name: Kafka connector integration test (Java ${{ matrix.java }})
     needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'false' && needs.changes.outputs.engine == 'false' && contains(needs.changes.outputs.it-modules, 'connector-kafka-e2e')
+    if: >-
+      needs.changes.outputs.api == 'false' &&
+      needs.changes.outputs.engine == 'false' &&
+      contains(needs.changes.outputs.it-modules, 'connector-kafka-e2e')
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         java: [ '8', '11' ]
     timeout-minutes: 210
@@ -690,17 +848,20 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: free disk space
+          restore-keys: |
+            seatunnel-m2-
+      - name: Free disk space
         run: tools/github/free_disk_space.sh
-      - name: Run kafka connector IT
+      - name: Run Kafka integration tests
         run: |
           ./mvnw -B -T 1 verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
@@ -709,10 +870,15 @@ jobs:
           MAVEN_OPTS: -Xmx4096m
 
   rocketmq-connector-it:
+    name: RocketMQ connector integration test (Java ${{ matrix.java }})
     needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'false' && needs.changes.outputs.engine == 'false' && contains(needs.changes.outputs.it-modules, 'connector-rocketmq-e2e')
+    if: >-
+      needs.changes.outputs.api == 'false' &&
+      needs.changes.outputs.engine == 'false' &&
+      contains(needs.changes.outputs.it-modules, 'connector-rocketmq-e2e')
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         java: [ '8', '11' ]
     timeout-minutes: 120
@@ -724,15 +890,18 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: Run rocketmq connector IT
+          restore-keys: |
+            seatunnel-m2-
+      - name: Run RocketMQ integration tests
         run: |
           ./mvnw -B -T 1 verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
@@ -741,10 +910,15 @@ jobs:
           MAVEN_OPTS: -Xmx4096m
 
   doris-connector-it:
+    name: Doris connector integration test (Java ${{ matrix.java }})
     needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'false' && needs.changes.outputs.engine == 'false' && contains(needs.changes.outputs.it-modules, 'connector-doris-e2e')
+    if: >-
+      needs.changes.outputs.api == 'false' &&
+      needs.changes.outputs.engine == 'false' &&
+      contains(needs.changes.outputs.it-modules, 'connector-doris-e2e')
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         java: [ '8', '11' ]
     timeout-minutes: 180
@@ -756,15 +930,18 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: Run doris connector IT
+          restore-keys: |
+            seatunnel-m2-
+      - name: Run Doris integration tests
         run: |
           ./mvnw -B -T 1 verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
@@ -773,10 +950,15 @@ jobs:
           MAVEN_OPTS: -Xmx4096m
 
   paimon-connector-it:
+    name: Paimon connector integration test (Java ${{ matrix.java }})
     needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'false' && needs.changes.outputs.engine == 'false' && contains(needs.changes.outputs.it-modules, 'connector-paimon-e2e')
+    if: >-
+      needs.changes.outputs.api == 'false' &&
+      needs.changes.outputs.engine == 'false' &&
+      contains(needs.changes.outputs.it-modules, 'connector-paimon-e2e')
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         java: [ '8', '11' ]
     timeout-minutes: 180
@@ -788,15 +970,18 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: Run paimon connector IT
+          restore-keys: |
+            seatunnel-m2-
+      - name: Run Paimon integration tests
         run: |
           ./mvnw -B -T 1 verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
@@ -805,47 +990,15 @@ jobs:
           MAVEN_OPTS: -Xmx4096m
 
   oracle-cdc-connector-it:
+    name: Oracle CDC connector integration test (Java ${{ matrix.java }})
     needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'false' && needs.changes.outputs.engine == 'false' && contains(needs.changes.outputs.it-modules, 'connector-cdc-oracle-e2e')
+    if: >-
+      needs.changes.outputs.api == 'false' &&
+      needs.changes.outputs.engine == 'false' &&
+      contains(needs.changes.outputs.it-modules, 'connector-cdc-oracle-e2e')
     runs-on: ubuntu-latest
     strategy:
-      matrix:
-        java: [ '8', '11' ]
-    timeout-minutes: 210
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up JDK ${{ matrix.java }}
-        uses: actions/setup-java@v3
-        with:
-          java-version: ${{ matrix.java }}
-          distribution: 'temurin'
-          cache: 'maven'
-      - name: Restore seatunnel artifacts
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.m2/repository/org/apache/seatunnel
-          key: seatunnel-m2-${{ github.run_id }}
-      - name: free disk space
-        run: tools/github/free_disk_space.sh
-      - name: Run oracle cdc connector IT
-        uses: nick-fields/retry@v3
-        with:
-          timeout_seconds: 9000
-          max_attempts: 3
-          retry_on: error
-          command: |
-            ./mvnw -B -T 1 verify \
-              -DskipUT=true -DskipIT=false \
-              -D"license.skipAddThirdParty"=true \
-              -D"skip.ui"=true \
-              --no-snapshot-updates \
-              -pl :connector-cdc-oracle-e2e -am -Pci
-
-  connector-file-local-it:
-    needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'false' && needs.changes.outputs.engine == 'false' && contains(needs.changes.outputs.it-modules, 'connector-file-local-e2e')
-    runs-on: ubuntu-latest
-    strategy:
+      fail-fast: false
       matrix:
         java: [ '8', '11' ]
     timeout-minutes: 120
@@ -857,15 +1010,65 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: Run file local connector IT
+          restore-keys: |
+            seatunnel-m2-
+      - name: Free disk space
+        run: tools/github/free_disk_space.sh
+      - name: Run Oracle CDC integration tests
+        uses: nick-fields/retry@v3
+        with:
+          timeout_seconds: 3000
+          max_attempts: 3
+          retry_on: error
+          command: |
+            ./mvnw -B -T 1 verify \
+              -DskipUT=true \
+              -DskipIT=false \
+              -D"license.skipAddThirdParty"=true \
+              -D"skip.ui"=true \
+              --no-snapshot-updates \
+              -pl :connector-cdc-oracle-e2e -am -Pci
+        env:
+          MAVEN_OPTS: -Xmx4096m
+
+  connector-file-local-it:
+    name: File-local connector integration test (Java ${{ matrix.java }})
+    needs: [ build, changes ]
+    if: >-
+      needs.changes.outputs.api == 'false' &&
+      needs.changes.outputs.engine == 'false' &&
+      contains(needs.changes.outputs.it-modules, 'connector-file-local-e2e')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [ '8', '11' ]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: 'temurin'
+          cache: 'maven'
+      - name: Restore build artifacts
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository/org/apache/seatunnel
+          key: seatunnel-m2-${{ github.run_id }}
+          restore-keys: |
+            seatunnel-m2-
+      - name: Run file-local integration tests
         run: |
           ./mvnw -B -T 1 verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
@@ -874,10 +1077,15 @@ jobs:
           MAVEN_OPTS: -Xmx4096m
 
   connector-file-sftp-it:
+    name: File-SFTP connector integration test (Java ${{ matrix.java }})
     needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'false' && needs.changes.outputs.engine == 'false' && contains(needs.changes.outputs.it-modules, 'connector-file-sftp-e2e')
+    if: >-
+      needs.changes.outputs.api == 'false' &&
+      needs.changes.outputs.engine == 'false' &&
+      contains(needs.changes.outputs.it-modules, 'connector-file-sftp-e2e')
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         java: [ '8', '11' ]
     timeout-minutes: 120
@@ -889,15 +1097,18 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: Run file sftp connector IT
+          restore-keys: |
+            seatunnel-m2-
+      - name: Run file-SFTP integration tests
         run: |
           ./mvnw -B -T 1 verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
@@ -906,13 +1117,18 @@ jobs:
           MAVEN_OPTS: -Xmx4096m
 
   connector-redis-it:
+    name: Redis connector integration test (Java ${{ matrix.java }})
     needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'false' && needs.changes.outputs.engine == 'false' && contains(needs.changes.outputs.it-modules, 'connector-redis-e2e')
+    if: >-
+      needs.changes.outputs.api == 'false' &&
+      needs.changes.outputs.engine == 'false' &&
+      contains(needs.changes.outputs.it-modules, 'connector-redis-e2e')
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         java: [ '8', '11' ]
-    timeout-minutes: 210
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK ${{ matrix.java }}
@@ -921,17 +1137,20 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: free disk space
+          restore-keys: |
+            seatunnel-m2-
+      - name: Free disk space
         run: tools/github/free_disk_space.sh
-      - name: Run redis connector IT
+      - name: Run Redis integration tests
         run: |
           ./mvnw -B -T 1 verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
@@ -940,10 +1159,15 @@ jobs:
           MAVEN_OPTS: -Xmx4096m
 
   connector-sensorsdata-it:
+    name: SensorsData connector integration test (Java ${{ matrix.java }})
     needs: [ build, changes ]
-    if: needs.changes.outputs.api == 'false' && needs.changes.outputs.engine == 'false' && contains(needs.changes.outputs.it-modules, 'connector-sensorsdata-e2e')
+    if: >-
+      needs.changes.outputs.api == 'false' &&
+      needs.changes.outputs.engine == 'false' &&
+      contains(needs.changes.outputs.it-modules, 'connector-sensorsdata-e2e')
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         java: [ '8', '11' ]
     timeout-minutes: 180
@@ -955,17 +1179,20 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
-      - name: Restore seatunnel artifacts
+      - name: Restore build artifacts
         uses: actions/cache/restore@v4
         with:
           path: ~/.m2/repository/org/apache/seatunnel
           key: seatunnel-m2-${{ github.run_id }}
-      - name: free disk space
+          restore-keys: |
+            seatunnel-m2-
+      - name: Free disk space
         run: tools/github/free_disk_space.sh
-      - name: Run sensorsdata connector IT
+      - name: Run SensorsData integration tests
         run: |
           ./mvnw -B -T 1 verify \
-            -DskipUT=true -DskipIT=false \
+            -DskipUT=true \
+            -DskipIT=false \
             -D"license.skipAddThirdParty"=true \
             -D"skip.ui"=true \
             --no-snapshot-updates \
